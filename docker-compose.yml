@@ -1,0 +1,170 @@
+services:
+  django:
+    container_name: django-local
+    build:
+      context: .
+      dockerfile: Dockerfile.back
+      target: builder
+    working_dir: /home/app/api
+    env_file:
+      - ./backend/.env.local
+    command: >
+      sh -c "python manage.py makemigations && 
+        python manage.py migrate && 
+        python manage.py loaddata initial_data.yaml && 
+        python manage.py runserver 0.0.0.0:8000"
+    expose:
+      - 8000
+    depends_on:
+      - db
+    volumes:
+      - ./backend:/home/app/api
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-network"
+      - "traefik.http.routers.django.rule=Host(`django.local.com`)"
+      - "traefik.http.routers.django.entrypoints=web"
+      - "traefik.http.routers.django.service=django"
+      - "traefik.http.services.django.loadbalancer.server.port=8000"
+
+  db:
+    container_name: db-local
+    image: postgres
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env.local
+    # expose:
+    #   - 5432
+    ports:
+      - "5432:5432"
+    volumes:
+      - db:/var/lib/postgresql/data
+    networks:
+      - backend-network
+
+  frontend:
+    env_file:
+      - ./frontend/.env.local
+    build:
+      context: .
+      dockerfile: Dockerfile.front
+    command: ["nginx", "-g", "daemon off;"]
+    container_name: frontend-local
+    expose:
+      - 80
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-network"
+      - "traefik.http.routers.frontend.rule=Host(`frontend.local.com`)"
+      - "traefik.http.routers.frontend.entrypoints=web"
+      - "traefik.http.routers.frontend.service=frontend"
+      - "traefik.http.services.frontend.loadbalancer.server.port=5555"
+
+  redis:
+    container_name: redis-crm-dev
+    image: redis:latest
+    env_file:
+      - ./backend/.env.local
+    networks:
+      - backend-network
+    expose:
+      - 6379
+    restart: unless-stopped
+
+  celery:
+    container_name: celery-crm-dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    working_dir: /home/app/api
+    env_file:
+      - ./backend/.env.local
+    environment:
+      TZ: America/Sao_Paulo
+    command: >
+      sh -c "celery -A config worker --loglevel=info"
+    volumes:
+      - .:/home/app/api
+    networks:
+      - backend-network
+    depends_on:
+      - redis
+      - django
+    restart: unless-stopped
+
+  celery-beat:
+    container_name: celery-beat-crm-dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    working_dir: /home/app/api
+    env_file:
+      - ./backend/.env.local
+    environment:
+      TZ: America/Sao_Paulo
+    command: celery -A config beat --loglevel=info
+    volumes:
+      - ./backend:/home/app/api
+    networks:
+      - backend-network
+    depends_on:
+      - celery
+      - redis
+      - django
+    restart: unless-stopped
+
+  celery-flower:
+    container_name: celery-flower-crm-dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    working_dir: /home/app/api
+    env_file:
+      - ./backend/.env.local
+    command: "celery -A config flower --port=5555 --broker=${CELERY_BROKER_URL:-redis://redis:6379/0}"
+    volumes:
+      - ./backend:/home/app/api
+    depends_on:
+      - celery
+      - celery-beat
+    expose:
+      - 5555
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-network"
+      - "traefik.http.routers.celery-flower.rule=Host(`flower.local.com`)"
+      - "traefik.http.routers.celery-flower.entrypoints=web"
+      - "traefik.http.routers.celery-flower.service=celery-flower"
+      - "traefik.http.services.celery-flower.loadbalancer.server.port=5555"
+    networks:
+      - traefik-network
+      - backend-network
+    restart: unless-stopped
+
+  traefik:
+    image: traefik:latest
+    container_name: traefik-local
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./traefik/config/traefik.yaml:/etc/traefik/traefik.yaml
+      - ./traefik/config/dynamic.yaml:/etc/traefik/dynamic.yaml
+    networks:
+      - traefik-network
+    restart: unless-stopped
+
+volumes:
+  db:
+    driver: local
+
+networks:
+  backend-network:
+  traefik-network:

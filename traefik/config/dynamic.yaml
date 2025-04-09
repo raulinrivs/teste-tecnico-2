@@ -1,0 +1,18 @@
+http:
+  middlewares:
+    corsHeaders:
+      headers:
+        accessControlAllowOriginList:
+          - "https://django.local.com"
+          - "https://backend.local.com"
+        accessControlAllowMethods:
+          - "GET"
+          - "OPTIONS"
+          - "POST"
+          - "PUT"
+          - "DELETE"
+          - "PATCH"
+        accessControlAllowHeaders:
+          - "Content-Type"
+          - "Authorization"
+        accessControlAllowCredentials: true
